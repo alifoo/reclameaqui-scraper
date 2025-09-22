@@ -60,7 +60,7 @@ def fetch_complaint_info(soup, i):
             "div[data-testid='complaint-evaluation-interaction']"
         )
         if evaluation_panel:
-            complaint_data["evaluation_solved"] = safe_get_text(
+            complaint_data["solved"] = safe_get_text(
                 evaluation_panel.select_one("div[data-testid='complaint-status']")
             )
             deal_again_header = evaluation_panel.find(
@@ -80,31 +80,16 @@ def fetch_complaint_info(soup, i):
             )
         print("Details extracted successfully.")
     else:
-        location, detailed_date, full_title, full_description = (
-            "Container not found",
-            "Container not found",
-            "Container not found",
-            "Container not found",
-        )
-        company_response, evaluation_final_consideration = (
-            "Container not found",
-            "Container not found",
-        )
-        evaluation_solved, evaluation_deal_again, evaluation_score = (
-            "Container not found",
-            "Container not found",
-            "Container not found",
-        )
         complaint_data = {
-            "location": location,
-            "detailed_date": detailed_date,
-            "full_title": full_title,
-            "full_description": full_description,
-            "company_response": company_response,
-            "evaluation_final_consideration": evaluation_final_consideration,
-            "evaluation_solved": evaluation_solved,
-            "evaluation_deal_again": evaluation_deal_again,
-            "score": evaluation_score,
+            "location": "Not found",
+            "detailed_date": "Not found",
+            "full_title": "Not found",
+            "full_description": "Not found",
+            "company_response": "Not found",
+            "final_consideration": "Not found",
+            "solved": "Not found",
+            "deal_again": "Not found",
+            "score": "Not found",
         }
 
     return complaint_data
@@ -273,8 +258,12 @@ if __name__ == "__main__":
 
     if scraped_data:
         df = pd.DataFrame(scraped_data)
+        base_output_file = f"reclameaqui_{company_name}_complaints"
 
-        output_file = f"reclameaqui_{company_name}_complaints.csv"
-        df.to_csv(output_file, index=False, encoding="utf-8-sig")
+        csv_file = f"{base_output_file}.csv"
+        df.to_csv(csv_file, index=False, encoding="utf-8-sig")
+        print(f"Data saved successfully to {csv_file}")
 
-        print(f"Data saved successfully to {output_file}.")
+        parquet_file = f"{base_output_file}.parquet"
+        df.to_parquet(parquet_file, index=False)
+        print(f"Data saved successfully to {parquet_file}")
