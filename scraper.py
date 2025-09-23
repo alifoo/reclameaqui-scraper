@@ -1,10 +1,11 @@
 import time
+import csv
 import random
-import platform
 import pandas as pd
 from playwright.sync_api import sync_playwright, TimeoutError, expect
 from playwright_stealth import Stealth
 from bs4 import BeautifulSoup
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 def check_cookie(page):
@@ -103,7 +104,7 @@ def scrape_complaints(company_name: str, pages_to_scrape: int):
     all_complaints_data = []
 
     with Stealth().use_sync(sync_playwright()) as p:
-        browser = p.chromium.launch(headless=False)
+        browser = p.chromium.launch(headless=True)
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
             viewport={"width": 1920, "height": 1080},
@@ -305,7 +306,6 @@ def get_companies_by_category():
 
 
 if __name__ == "__main__":
-    scraped_data = None
     companies = [
         "mattel-do-brasil-fisher-price-barbie-hotwheels-polly-monster-high",
         "fun-divirta-se",
@@ -318,18 +318,35 @@ if __name__ == "__main__":
         "toyster-brinquedos",
         "mega-compras",
     ]
-    for company in companies:
-        if not scraped_data:
-            scraped_data = scrape_complaints(company, 1)
-        else:
-            scraped_data.extend(scrape_complaints(company, 1))
 
-    if scraped_data:
-        df = pd.DataFrame(scraped_data)
+    results = []
+    max_threads = min(len(companies), 16)
+
+    with ThreadPoolExecutor(max_threads) as executor:
+        futures = {
+            executor.submit(scrape_complaints, company, 50): company
+            for company in companies
+        }
+        for future in as_completed(futures):
+            company = futures[future]
+            try:
+                data = future.result()
+                if data:
+                    results.extend(data)
+                    print(f"Finished {company}, got {len(data)} complaints")
+                else:
+                    print(f"No data for {company}")
+            except Exception as e:
+                print(f"Error scraping {company}: {e}")
+
+    if results:
+        df = pd.DataFrame(results)
         base_output_file = f"reclameaqui_{len(companies)}_companies_complaints"
 
         csv_file = f"{base_output_file}.csv"
-        df.to_csv(csv_file, index=False, encoding="utf-8-sig", sep=";")
+        df.to_csv(
+            csv_file, index=False, encoding="utf-8-sig", sep=";", quoting=csv.QUOTE_ALL
+        )
         print(f"Data saved successfully to {csv_file}")
 
         parquet_file = f"{base_output_file}.parquet"
