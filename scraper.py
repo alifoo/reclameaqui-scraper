@@ -208,7 +208,7 @@ def scrape_complaints(company_name: str, pages_to_scrape: int):
 
                     print("  <- Navigating back to the list page...")
                     main_page.go_back(wait_until="domcontentloaded")
-                    time.sleep(random.uniform(5, 10))
+                    time.sleep(random.uniform(4, 6))
 
                 print(f"Finished scraping details for page {page_num}.")
                 time.sleep(random.uniform(4, 6))
@@ -253,64 +253,80 @@ def scrape_complaints(company_name: str, pages_to_scrape: int):
 
 
 def get_companies_by_category():
-    print(f"Starting to get company names...")
-    url = "https://www.reclameaqui.com.br/segmentos/arte-e-entretenimento/brinquedos-e-entretenimento-infantil/"
-    companies = []
+    pass
 
-    with Stealth().use_sync(sync_playwright()) as p:
-        browser = p.chromium.launch(headless=False)
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
-            viewport={"width": 1920, "height": 1080},
-        )
-        main_page = context.new_page()
 
-        print(f"Navigating to {url}...")
-        main_page.goto(url, wait_until="domcontentloaded", timeout=60000)
-
-        check_cookie(main_page)
-
-        try:
-            if "verify-human" in main_page.url:
-                print("CAPTCHA detected, stopping.")
-
-            complaint_list_selector = ".sc-1sm4sxr-0.iwOeoe"
-            print(
-                f"Waiting for complaint list to load using selector: {complaint_list_selector}"
-            )
-
-            try:
-                print(f"Waiting for complaint list: {complaint_list_selector}")
-                main_page.wait_for_selector(complaint_list_selector, timeout=30000)
-                print("Complaint list loaded.")
-            except TimeoutError:
-                print("Timeout while waiting for complaint list")
-
-            html_content = main_page.content()
-            soup = BeautifulSoup(html_content, "html.parser")
-            ranking_container = soup.select_one("[data-testid='ranking']")
-            if not ranking_container:
-                print("No ranking container found on this page.")
-                print(main_page.content()[:500])
-
-            print(ranking_container)
-
-            return []
-        except Exception as e:
-            print(f"An error occurred while loading the page num {page_num}: {e}")
-            return []
+#    print(f"Starting to get company names...")
+#    url = "https://www.reclameaqui.com.br/segmentos/arte-e-entretenimento/brinquedos-e-entretenimento-infantil/"
+#    companies = []
+#
+#    with Stealth().use_sync(sync_playwright()) as p:
+#        browser = p.chromium.launch(headless=False)
+#        context = browser.new_context(
+#            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
+#            viewport={"width": 1920, "height": 1080},
+#        )
+#        main_page = context.new_page()
+#
+#        print(f"Navigating to {url}...")
+#        main_page.goto(url, wait_until="domcontentloaded", timeout=60000)
+#
+#        check_cookie(main_page)
+#
+#        try:
+#            if "verify-human" in main_page.url:
+#                print("CAPTCHA detected, stopping.")
+#
+#            complaint_list_selector = ".sc-1sm4sxr-0.iwOeoe"
+#            print(
+#                f"Waiting for complaint list to load using selector: {complaint_list_selector}"
+#            )
+#
+#            try:
+#                print(f"Waiting for complaint list: {complaint_list_selector}")
+#                main_page.wait_for_selector(complaint_list_selector, timeout=30000)
+#                print("Complaint list loaded.")
+#            except TimeoutError:
+#                print("Timeout while waiting for complaint list")
+#
+#            html_content = main_page.content()
+#            soup = BeautifulSoup(html_content, "html.parser")
+#            ranking_container = soup.select_one("[data-testid='ranking']")
+#            if not ranking_container:
+#                print("No ranking container found on this page.")
+#                print(main_page.content()[:500])
+#
+#            print(ranking_container)
+#
+#            return []
+#        except Exception as e:
+#            print(f"An error occurred while loading the page num {page_num}: {e}")
+#            return []
 
 
 if __name__ == "__main__":
-    company_name = "mattel-do-brasil-fisher-price-barbie-hotwheels-polly-monster-high"
-    companies = get_companies_by_category()
-    exit()
+    scraped_data = None
+    companies = [
+        "mattel-do-brasil-fisher-price-barbie-hotwheels-polly-monster-high",
+        "fun-divirta-se",
+        "elka",
+        "rca-entretenimento",
+        "maral",
+        "novabrink",
+        "sunny-brinquedos-importacao-e-exportacao",
+        "xalingo-brinquedos",
+        "toyster-brinquedos",
+        "mega-compras",
+    ]
     for company in companies:
-        scraped_data = scrape_complaints(company, 1)
+        if not scraped_data:
+            scraped_data = scrape_complaints(company, 1)
+        else:
+            scraped_data.extend(scrape_complaints(company, 1))
 
     if scraped_data:
         df = pd.DataFrame(scraped_data)
-        base_output_file = f"reclameaqui_{company_name}_complaints"
+        base_output_file = f"reclameaqui_{len(companies)}_companies_complaints"
 
         csv_file = f"{base_output_file}.csv"
         df.to_csv(csv_file, index=False, encoding="utf-8-sig", sep=";")
