@@ -7,6 +7,8 @@ from playwright_stealth import Stealth
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+SEGMENTS_PAGE_URL = "https://www.reclameaqui.com.br/segmentos/"
+
 
 def check_cookie(page):
     try:
@@ -253,59 +255,87 @@ def scrape_complaints(company_name: str, pages_to_scrape: int):
         return all_complaints_data
 
 
-def get_companies_by_category():
-    pass
+def fetch_segments():
+
+    with Stealth().use_sync(sync_playwright()) as p:
+        browser = p.chromium.launch(headless=False)
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
+            viewport={"width": 1920, "height": 1080},
+        )
+        main_page = context.new_page()
+
+        print(f"Navigating to {SEGMENTS_PAGE_URL}...")
+        main_page.goto(SEGMENTS_PAGE_URL, wait_until="domcontentloaded", timeout=60000)
+
+        check_cookie(main_page)
+        try:
+            if "verify-human" in main_page.url:
+                print("CAPTCHA detected, stopping.")
+
+            segments_selector = "fab-wrapper"
+            print(f"Waiting for segments to load using selector: {segments_selector}")
+
+            try:
+                main_page.get_by_test_id(segments_selector).wait_for(timeout=30000)
+                print("Segments page loaded.")
+            except TimeoutError:
+                print("Timeout while waiting for segments page load.")
+            except Exception as e:
+                print(e)
+
+            html_content = main_page.content()
+            soup = BeautifulSoup(html_content, "html.parser")
+            segment_containers = soup.select("div.rs-acordeon.rs-w-full.rs-h-fit")
+
+            texts = soup.select("span.rs-text-base.rs-font-semibold.rs-text-left")
+            segments = [text.get_text(strip=True) for text in texts if text]
+
+            expand_buttons_locator = main_page.locator(
+                "button[aria-controls$='-acordeon']"
+            )
+            button_count = expand_buttons_locator.count()
+            print(f"Found {button_count} buttons to click.")
+
+            if len(segments) != button_count:
+                print("Segments and button_count are different. Check the index.")
+
+            for i in range(button_count):
+                print(f"Clicking button {i}.")
+                button = expand_buttons_locator.nth(i)
+                if button.is_visible():
+                    button.hover()
+                    time.sleep(random.uniform(0.5, 1.5))
+                    button.click(delay=random.randint(50, 150))
+
+            for segment_title in segments:
+                print(f"Processing segment: {segment_title}")
+
+                segment_button = main_page.locator(f"button[title$='{segment_title}']")
+                print(segment_button)
+
+                try:
+                    segment_button.wait_for(state="visible", timeout=10000)
+
+                    print("Found segment button. Clicking...")
+                    segment_button.hover()
+                    time.sleep(random.uniform(1.0, 2.5))
+                    segment_button.click(delay=random.randint(1, 2))
+
+                    time.sleep(50)
+
+                    print("Navigating back to the segments list...")
+                    main_page.go_back(wait_until="domcontentloaded")
+                    print("Back on the list page.")
+                except Exception as e:
+                    print(f"An error occurred while processing '{segment_title}': {e}")
+                    main_page.goto(SEGMENTS_PAGE_URL, wait_until="domcontentloaded")
+
+        except Exception as e:
+            print(e)
 
 
-#    print(f"Starting to get company names...")
-#    url = "https://www.reclameaqui.com.br/segmentos/arte-e-entretenimento/brinquedos-e-entretenimento-infantil/"
-#    companies = []
-#
-#    with Stealth().use_sync(sync_playwright()) as p:
-#        browser = p.chromium.launch(headless=False)
-#        context = browser.new_context(
-#            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
-#            viewport={"width": 1920, "height": 1080},
-#        )
-#        main_page = context.new_page()
-#
-#        print(f"Navigating to {url}...")
-#        main_page.goto(url, wait_until="domcontentloaded", timeout=60000)
-#
-#        check_cookie(main_page)
-#
-#        try:
-#            if "verify-human" in main_page.url:
-#                print("CAPTCHA detected, stopping.")
-#
-#            complaint_list_selector = ".sc-1sm4sxr-0.iwOeoe"
-#            print(
-#                f"Waiting for complaint list to load using selector: {complaint_list_selector}"
-#            )
-#
-#            try:
-#                print(f"Waiting for complaint list: {complaint_list_selector}")
-#                main_page.wait_for_selector(complaint_list_selector, timeout=30000)
-#                print("Complaint list loaded.")
-#            except TimeoutError:
-#                print("Timeout while waiting for complaint list")
-#
-#            html_content = main_page.content()
-#            soup = BeautifulSoup(html_content, "html.parser")
-#            ranking_container = soup.select_one("[data-testid='ranking']")
-#            if not ranking_container:
-#                print("No ranking container found on this page.")
-#                print(main_page.content()[:500])
-#
-#            print(ranking_container)
-#
-#            return []
-#        except Exception as e:
-#            print(f"An error occurred while loading the page num {page_num}: {e}")
-#            return []
-
-
-if __name__ == "__main__":
+def execute():
     companies = [
         "mattel-do-brasil-fisher-price-barbie-hotwheels-polly-monster-high",
         "fun-divirta-se",
@@ -352,3 +382,7 @@ if __name__ == "__main__":
         parquet_file = f"{base_output_file}.parquet"
         df.to_parquet(parquet_file, index=False)
         print(f"Data saved successfully to {parquet_file}")
+
+
+if __name__ == "__main__":
+    fetch_segments()
