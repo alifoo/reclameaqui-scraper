@@ -388,9 +388,13 @@ def get_best_ranked_companies():
         finally:
             browser.close()
 
+    # quick fix. TODO
+    unique_companies = list(dict.fromkeys(ranked_companies_names))
+
     print("\n--- Scraping company names complete ---")
-    print(f"Collected a total of {len(ranked_companies_names)} company names.")
-    df = pd.DataFrame(ranked_companies_names, columns=["company_name"])
+    print(f"Collected a total of {len(unique_companies)} company names.")
+
+    df = pd.DataFrame(unique_companies, columns=["company_name"])
     df.to_csv("best_ranked_companies.csv", index=False, encoding="utf-8-sig")
     print("Data saved to best_ranked_companies.csv")
 
@@ -399,11 +403,11 @@ def get_best_ranked_companies():
 
 def execute(companies):
     results = []
-    max_threads = min(len(companies), 16)
+    max_threads = min(4, 12)
 
     with ThreadPoolExecutor(max_threads) as executor:
         futures = {
-            executor.submit(scrape_complaints, company, 50): company
+            executor.submit(scrape_complaints, company, 10): company
             for company in companies
         }
         for future in as_completed(futures):
@@ -435,4 +439,4 @@ def execute(companies):
 
 if __name__ == "__main__":
     companies = get_best_ranked_companies()
-    execute(companies[:5])
+    execute(companies)
