@@ -1,4 +1,5 @@
 import time
+import re
 import csv
 import random
 import pandas as pd
@@ -255,8 +256,59 @@ def scrape_complaints(company_name: str, pages_to_scrape: int):
         return all_complaints_data
 
 
-def fetch_segments():
+def expand_buttons(main_page, segments):
+    expand_buttons_locator = main_page.locator("button[aria-controls$='-acordeon']")
+    button_count = expand_buttons_locator.count()
+    print(f"Found {button_count} buttons to click.")
 
+    if len(segments) != button_count:
+        print("Segments and button_count are different. Check the index.")
+
+    for i in range(button_count - 29):
+        print(f"Clicking button {i + 1}.")
+        button = expand_buttons_locator.nth(i)
+        if button.is_visible():
+            button.hover()
+            time.sleep(random.uniform(0.5, 1.5))
+            button.click(delay=random.randint(50, 150))
+
+    print("\nAll accordions expanded. Now finding all segment links...")
+
+
+def scrape_company_names(main_page, category):
+    try:
+        ranking_selector = "ranking"
+        main_page.get_by_test_id(ranking_selector).wait_for(timeout=5000)
+        print(f"Best company names loaded for {category} category.")
+    except TimeoutError:
+        print("Timeout while waiting for company names page load.")
+        return []
+    except Exception as e:
+        print(e)
+        return []
+
+    company_locators = main_page.locator(
+        "div.rs-flex.rs-items-center a[href*='/empresa/']"
+    )
+
+    all_hrefs = []
+    for i in range(company_locators.count()):
+        href = company_locators.nth(i).get_attribute("href")
+        if href:
+            all_hrefs.append(href)
+
+    company_names = []
+    for href in all_hrefs:
+        match = re.search(r"/empresa/([^/]+)", href)
+        if match:
+            company_names.append(match.group(1))
+
+    print(f"Found {len(company_names)} companies inside {category} page.")
+    return company_names
+
+
+def get_best_ranked_companies():
+    ranked_companies_names = []
     with Stealth().use_sync(sync_playwright()) as p:
         browser = p.chromium.launch(headless=False)
         context = browser.new_context(
@@ -267,88 +319,85 @@ def fetch_segments():
 
         print(f"Navigating to {SEGMENTS_PAGE_URL}...")
         main_page.goto(SEGMENTS_PAGE_URL, wait_until="domcontentloaded", timeout=60000)
-
         check_cookie(main_page)
+
         try:
-            if "verify-human" in main_page.url:
-                print("CAPTCHA detected, stopping.")
+            accordion_locators = main_page.locator("div.rs-acordeon")
+            accordion_count = accordion_locators.count()
+            print(f"Found {accordion_count} segment accordions to process.")
 
-            segments_selector = "fab-wrapper"
-            print(f"Waiting for segments to load using selector: {segments_selector}")
+            for i in range(accordion_count):
+                accordion = main_page.locator("div.rs-acordeon").nth(i)
+                header_button = accordion.locator("button[aria-controls]")
+                header_text = header_button.text_content()
+                print(
+                    f"\n--- Processing Accordion {i + 1}/{accordion_count}: {header_text.strip()} ---"
+                )
 
-            try:
-                main_page.get_by_test_id(segments_selector).wait_for(timeout=30000)
-                print("Segments page loaded.")
-            except TimeoutError:
-                print("Timeout while waiting for segments page load.")
-            except Exception as e:
-                print(e)
+                header_button.scroll_into_view_if_needed()
+                if header_button.get_attribute("aria-expanded") == "false":
+                    header_button.click()
+                    time.sleep(0.5)
 
-            html_content = main_page.content()
-            soup = BeautifulSoup(html_content, "html.parser")
-            segment_containers = soup.select("div.rs-acordeon.rs-w-full.rs-h-fit")
+                links_in_accordion = accordion.locator("a[href*='/segmentos/']")
+                links_count_inside = links_in_accordion.count()
+                print(f"Found {links_count_inside} links in this section.")
 
-            texts = soup.select("span.rs-text-base.rs-font-semibold.rs-text-left")
-            segments = [text.get_text(strip=True) for text in texts if text]
+                for j in range(links_count_inside):
+                    try:
+                        current_accordion = main_page.locator("div.rs-acordeon").nth(i)
+                        current_expand_button = current_accordion.locator(
+                            "button[aria-controls]"
+                        )
 
-            expand_buttons_locator = main_page.locator(
-                "button[aria-controls$='-acordeon']"
-            )
-            button_count = expand_buttons_locator.count()
-            print(f"Found {button_count} buttons to click.")
+                        current_expand_button.scroll_into_view_if_needed()
+                        if (
+                            current_expand_button.get_attribute("aria-expanded")
+                            == "false"
+                        ):
+                            print(f"Re-opening accordion for link {j + 1}...")
+                            current_expand_button.click()
+                            time.sleep(0.5)
 
-            if len(segments) != button_count:
-                print("Segments and button_count are different. Check the index.")
+                        link_to_click = current_accordion.locator(
+                            "a[href*='/segmentos/']"
+                        ).nth(j)
+                        link_text = link_to_click.text_content()
+                        print(
+                            f"Processing link {j + 1}/{links_count_inside}: {link_text.strip()}"
+                        )
 
-            for i in range(button_count):
-                print(f"Clicking button {i}.")
-                button = expand_buttons_locator.nth(i)
-                if button.is_visible():
-                    button.hover()
-                    time.sleep(random.uniform(0.5, 1.5))
-                    button.click(delay=random.randint(50, 150))
+                        link_to_click.click()
 
-            for segment_title in segments:
-                print(f"Processing segment: {segment_title}")
+                        company_names = scrape_company_names(
+                            main_page, link_text.strip()
+                        )
+                        if company_names:
+                            ranked_companies_names.extend(company_names)
 
-                segment_button = main_page.locator(f"button[title$='{segment_title}']")
-                print(segment_button)
+                        print("Navigating back to the segments list...")
+                        main_page.go_back(wait_until="domcontentloaded")
+                        main_page.locator("div.rs-acordeon").first.wait_for()
 
-                try:
-                    segment_button.wait_for(state="visible", timeout=10000)
-
-                    print("Found segment button. Clicking...")
-                    segment_button.hover()
-                    time.sleep(random.uniform(1.0, 2.5))
-                    segment_button.click(delay=random.randint(1, 2))
-
-                    time.sleep(50)
-
-                    print("Navigating back to the segments list...")
-                    main_page.go_back(wait_until="domcontentloaded")
-                    print("Back on the list page.")
-                except Exception as e:
-                    print(f"An error occurred while processing '{segment_title}': {e}")
-                    main_page.goto(SEGMENTS_PAGE_URL, wait_until="domcontentloaded")
+                    except Exception as e:
+                        print(f"An error occurred on inner link #{j+1}: {e}")
+                        main_page.goto(SEGMENTS_PAGE_URL, wait_until="domcontentloaded")
 
         except Exception as e:
-            print(e)
+            print(f"A major error occurred in the outer loop: {e}")
+        finally:
+            browser.close()
+
+    print("\n--- Scraping company names complete ---")
+    print(f"Collected a total of {len(ranked_companies_names)} company names.")
+    df = pd.DataFrame(ranked_companies_names, columns=["company_name"])
+    df.to_csv("best_ranked_companies.csv", index=False, encoding="utf-8-sig")
+    print("Data saved to best_ranked_companies.csv")
+
+    return ranked_companies_names
 
 
-def execute():
-    companies = [
-        "mattel-do-brasil-fisher-price-barbie-hotwheels-polly-monster-high",
-        "fun-divirta-se",
-        "elka",
-        "rca-entretenimento",
-        "maral",
-        "novabrink",
-        "sunny-brinquedos-importacao-e-exportacao",
-        "xalingo-brinquedos",
-        "toyster-brinquedos",
-        "mega-compras",
-    ]
-
+def execute(companies):
     results = []
     max_threads = min(len(companies), 16)
 
@@ -385,4 +434,5 @@ def execute():
 
 
 if __name__ == "__main__":
-    fetch_segments()
+    companies = get_best_ranked_companies()
+    execute(companies[:5])
