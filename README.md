@@ -8,20 +8,20 @@ Currently, it is running on AWS EC2 to be able to run 24/7.
 
 SSH into ec2 instance
 ```
-ssh -i scraper-key ubuntu@(server ip)
+ssh -i scraper-key ubuntu@3.235.182.148
 ```
 
 Copy script into machine
 ```
-scp -i scraper-key main.py ubuntu@(server ip):/home/ubuntu/scraper/
-```
-
-Visualize logs
-```
-tail -n 100 -f output.log
+scp -i scraper-key main.py ubuntu@3.235.182.148:/home/ubuntu/scraper/
 ```
 
 Run script in the background
 ```
 nohup python -u main.py > output.log 2>&1 &
+```
+
+Visualize logs while running
+```
+tail -n 100 -f output.log
 ```
