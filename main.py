@@ -108,7 +108,7 @@ def scrape_complaints(company_name: str, pages_to_scrape: int):
     all_complaints_data = []
 
     with Stealth().use_sync(sync_playwright()) as p:
-        browser = p.chromium.launch(headless=False)
+        browser = p.chromium.launch(headless=True)
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
             viewport={"width": 1920, "height": 1080},
@@ -311,7 +311,7 @@ def scrape_company_names(main_page, category):
 def get_best_ranked_companies():
     ranked_companies_names = []
     with Stealth().use_sync(sync_playwright()) as p:
-        browser = p.chromium.launch(headless=False)
+        browser = p.chromium.launch(headless=True)
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
             viewport={"width": 1920, "height": 1080},
@@ -405,7 +405,7 @@ def get_best_ranked_companies():
 def get_best_ranked_companies_by_category(category, category_url):
     ranked_companies_names = []
     with Stealth().use_sync(sync_playwright()) as p:
-        browser = p.chromium.launch(headless=False)
+        browser = p.chromium.launch(headless=True)
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
             viewport={"width": 1920, "height": 1080},
