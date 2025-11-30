@@ -1,3 +1,9 @@
 .venv/
 *.csv
 *.parquet
+*.pub
+.env
+.DS_Store
+.terraform/
+.terraform.*
+scraper-key

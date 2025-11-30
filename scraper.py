@@ -100,6 +100,7 @@ def fetch_complaint_info(soup, i):
 
 
 def scrape_complaints(company_name: str, pages_to_scrape: int):
+
     print(f"Starting to scrape {company_name}...")
     base_url = "https://www.reclameaqui.com.br"
     start_url = f"{base_url}/empresa/{company_name}/lista-reclamacoes/?status=EVALUATED"
@@ -107,7 +108,7 @@ def scrape_complaints(company_name: str, pages_to_scrape: int):
     all_complaints_data = []
 
     with Stealth().use_sync(sync_playwright()) as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(headless=False)
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
             viewport={"width": 1920, "height": 1080},
@@ -401,13 +402,34 @@ def get_best_ranked_companies():
     return ranked_companies_names
 
 
+def get_best_ranked_companies_by_category(category, category_url):
+    ranked_companies_names = []
+    with Stealth().use_sync(sync_playwright()) as p:
+        browser = p.chromium.launch(headless=False)
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
+            viewport={"width": 1920, "height": 1080},
+        )
+        main_page = context.new_page()
+
+        print(f"Navigating to {category_url}...")
+        main_page.goto(category_url, wait_until="domcontentloaded", timeout=60000)
+        check_cookie(main_page)
+
+        company_names = scrape_company_names(main_page, category)
+        if company_names:
+            ranked_companies_names.extend(company_names)
+
+    return ranked_companies_names
+
+
 def execute(companies):
     results = []
-    max_threads = min(4, 12)
+    max_threads = 1
 
     with ThreadPoolExecutor(max_threads) as executor:
         futures = {
-            executor.submit(scrape_complaints, company, 10): company
+            executor.submit(scrape_complaints, company, 3): company
             for company in companies
         }
         for future in as_completed(futures):
@@ -432,11 +454,11 @@ def execute(companies):
         )
         print(f"Data saved successfully to {csv_file}")
 
-        parquet_file = f"{base_output_file}.parquet"
-        df.to_parquet(parquet_file, index=False)
-        print(f"Data saved successfully to {parquet_file}")
-
 
 if __name__ == "__main__":
-    companies = get_best_ranked_companies()
+    companies = get_best_ranked_companies_by_category(
+        "Brinquedos e Entretenimento Infantil",
+        "https://www.reclameaqui.com.br/segmentos/arte-e-entretenimento/brinquedos-e-entretenimento-infantil/",
+    )
+
     execute(companies)
