@@ -1,3 +1,5 @@
+import os
+from sys import exception
 import time
 import re
 import csv
@@ -9,13 +11,58 @@ from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 SEGMENTS_PAGE_URL = "https://www.reclameaqui.com.br/segmentos/"
+OUTPUT_FILENAME = "reclameaqui_complaints.csv"
+MAX_RETRIES = 5
+
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
+]
+
+
+def get_random_ua():
+    return random.choice(USER_AGENTS)
+
+
+def save_incremental(data_list, filename):
+    if not data_list:
+        return
+    file_exists = os.path.isfile(filename)
+    keys = data_list[0].keys()
+
+    try:
+        with open(filename, "a", newline="", encoding="utf-8-sig") as output_file:
+            dict_writer = csv.DictWriter(
+                output_file, fieldnames=keys, delimiter=";", quoting=csv.QUOTE_ALL
+            )
+            if not file_exists:
+                dict_writer.writeheader()
+            dict_writer.writerows(data_list)
+        print(f"[SAVED] {len(data_list)} records saved to disk.")
+    except Exception as e:
+        print(f"[ERROR] Could not save data: {e}")
+
+
+def get_scraped_companies(filename):
+    if not os.path.isfile(filename):
+        return set()
+    try:
+        df = pd.read_csv(filename, sep=";", usecols=["company_name"])
+        return set(df["company_name"].unique())
+    except Exception as e:
+        print(
+            f"Warning: Could not read existing file to resume. Starting fresh. Error: {e}"
+        )
+        return set()
 
 
 def check_cookie(page):
     try:
         print("Checking for cookie banner...")
         accept_button = page.locator("#adopt-accept-all-button")
-        accept_button.click(timeout=20000)
+        accept_button.click(timeout=10000)
         print("Cookie banner accepted.")
     except TimeoutError:
         print("No cookie banner found or it was already dismissed.")
@@ -36,7 +83,7 @@ def fetch_complaint_info(soup, i):
         complaint_data["location"] = safe_get_text(
             complaint_container.select_one("[data-testid='complaint-location']")
         )
-        complaint_data["detailed_date"] = safe_get_text(
+        complaint_data["date"] = safe_get_text(
             complaint_container.select_one("[data-testid='complaint-creation-date']")
         )
         complaint_data["full_title"] = safe_get_text(
@@ -82,11 +129,15 @@ def fetch_complaint_info(soup, i):
                 if score_header
                 else "Not found"
             )
-        print("Details extracted successfully.")
+            print("Details extracted successfully.")
+        else:
+            complaint_data.update(
+                {"solved": "Not found", "deal_again": "Not found", "score": "Not found"}
+            )
     else:
         complaint_data = {
             "location": "Not found",
-            "detailed_date": "Not found",
+            "date": "Not found",
             "full_title": "Not found",
             "full_description": "Not found",
             "company_response": "Not found",
@@ -99,124 +150,123 @@ def fetch_complaint_info(soup, i):
     return complaint_data
 
 
-def scrape_complaints(company_name: str, pages_to_scrape: int):
-
+def scrape_complaints(company_name: str):
     print(f"Starting to scrape {company_name}...")
+
     base_url = "https://www.reclameaqui.com.br"
-    start_url = f"{base_url}/empresa/{company_name}/lista-reclamacoes/?status=EVALUATED"
-    url = f"https://www.reclameaqui.com.br/empresa/{company_name}/lista-reclamacoes/?status=EVALUATED"
+    url = f"{base_url}/empresa/{company_name}/lista-reclamacoes/?status=EVALUATED"
+
     all_complaints_data = []
 
     with Stealth().use_sync(sync_playwright()) as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
+            user_agent=get_random_ua(),
             viewport={"width": 1920, "height": 1080},
         )
         main_page = context.new_page()
 
-        print(f"Navigating to {url}...")
-        main_page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        try:
+            print(f"Navigating to {url}...")
+            main_page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            check_cookie(main_page)
 
-        check_cookie(main_page)
-
-        for page_num in range(1, pages_to_scrape + 1):
-            print(f"\n--- Scraping Page {page_num} of {pages_to_scrape} ---")
-
+            total_pages_selector = ".sc-1sm4sxr-0.iwOeoe"
             try:
-                if "verify-human" in main_page.url:
-                    print("CAPTCHA detected, stopping.")
-                    break
-
-                complaint_list_selector = ".sc-1sm4sxr-0.iwOeoe"
+                main_page.wait_for_selector(total_pages_selector, timeout=20000)
+            except TimeoutError:
                 print(
-                    f"Waiting for complaint list to load using selector: {complaint_list_selector}"
+                    f"Timeout while waiting for first complaint list (to get total pages number)"
+                )
+                return
+
+            pages_to_scrape = main_page.get_by_test_id("pages-label")
+            pages_to_scrape.wait_for(state="visible", timeout=10000)
+
+            text = pages_to_scrape.inner_text()
+            match = re.search(r"de\s+([\d\.]+)", text)
+            if match:
+                total_pages = int(match.group(1).replace(".", ""))
+            else:
+                print("Could not parse page number from text. Defaulting to 1.")
+                total_pages = 1
+
+            for page_num in range(1, total_pages + 1):
+                page_data = []
+                print(
+                    f"\n--- Scraping Page {page_num}/{total_pages} for {company_name} ---"
+                )
+
+                if "verify-human" in main_page.url:
+                    print("!!! CAPTCHA/BLOCK DETECTED. COOLING DOWN FOR 5 MINUTES !!!")
+                    time.sleep(300)
+                    continue
+
+                print(
+                    f"Waiting for complaint list to load using selector: {total_pages_selector}"
                 )
 
                 try:
-                    print(f"Waiting for complaint list: {complaint_list_selector}")
-                    main_page.wait_for_selector(complaint_list_selector, timeout=30000)
+                    print(f"Waiting for complaint list: {total_pages_selector}")
+                    main_page.wait_for_selector(total_pages_selector, timeout=20000)
                     print("Complaint list loaded.")
                 except TimeoutError:
-                    print("Timeout while waiting for complaint list")
+                    print(
+                        f"Timeout while waiting for complaint list on page {page_num}, skipping page."
+                    )
                     continue
 
                 first_title_element = main_page.locator("h4.sc-1pe7b5t-1.bVKmkO").first
                 old_title_text = first_title_element.inner_text()
-                print(f"First title on this page '{old_title_text}'")
 
                 html_content = main_page.content()
                 soup = BeautifulSoup(html_content, "html.parser")
                 complaint_containers = soup.select("div.sc-1pe7b5t-0.eJgBOc")
                 if not complaint_containers:
-                    print("No complaint containers found on this page.")
-                    print(main_page.content()[:500])
-                    break
+                    print(
+                        f"No complaint containers found on page {page_num}. Skipping."
+                    )
+                    continue
 
                 page_links = []
                 for complaint in complaint_containers:
-                    title_preview_tag = complaint.find(
-                        "h4", class_="sc-1pe7b5t-1 bVKmkO"
-                    )
-                    title_preview = (
-                        title_preview_tag.get_text(strip=True)
-                        if title_preview_tag
-                        else "No title"
-                    )
-
-                    description_preview_tag = complaint.find(
-                        "p", class_="sc-1pe7b5t-2 eHoNfA"
-                    )
-                    description_preview = (
-                        description_preview_tag.get_text(strip=True)
-                        if description_preview_tag
-                        else "No description"
-                    )
-
-                    date_preview_tag = complaint.find(
-                        "span", class_="sc-1pe7b5t-5 dspDoZ"
-                    )
-                    date_preview = (
-                        date_preview_tag.get_text(strip=True)
-                        if date_preview_tag
-                        else "No date"
-                    )
-
                     link_tag = complaint.find("a", id="site_bp_lista_ler_reclamacao")
 
-                    if (
-                        title_preview
-                        and description_preview
-                        and date_preview
-                        and link_tag
-                    ):
-                        print(f"Found complaint: {title_preview}")
+                    if link_tag:
                         page_links.append(
                             {
+                                "company_name": company_name,
                                 "url": base_url + link_tag["href"],
-                                "title_preview": title_preview,
-                                "desc_preview": description_preview,
-                                "date_preview": date_preview,
                             }
                         )
 
                 for i, link_info in enumerate(page_links):
                     print(f"  -> Navigating to complaint {i+1}: {link_info['url']}")
-                    main_page.goto(link_info["url"], wait_until="domcontentloaded")
-                    time.sleep(random.uniform(2, 4))
+                    try:
+                        main_page.goto(
+                            link_info["url"],
+                            wait_until="domcontentloaded",
+                            timeout=45000,
+                        )
+                        time.sleep(random.uniform(1.7, 3.8))
 
-                    detail_soup = BeautifulSoup(main_page.content(), "html.parser")
-                    details = fetch_complaint_info(detail_soup, i)
+                        detail_soup = BeautifulSoup(main_page.content(), "html.parser")
+                        details = fetch_complaint_info(detail_soup, i)
 
-                    link_info.update(details)
-                    all_complaints_data.append(link_info)
+                        link_info.update(details)
+                        page_data.append(link_info)
 
-                    print("  <- Navigating back to the list page...")
-                    main_page.go_back(wait_until="domcontentloaded")
-                    time.sleep(random.uniform(4, 6))
+                        print("  <- Navigating back to the list page...")
+                        main_page.go_back(wait_until="domcontentloaded")
+                    except Exception as e:
+                        print(f"Failed to scrape specific complaint: {e}")
+                        try:
+                            main_page.goto(url, wait_until="domcontentloaded")
+                        except:
+                            pass
 
+                save_incremental(page_data, OUTPUT_FILENAME)
                 print(f"Finished scraping details for page {page_num}.")
-                time.sleep(random.uniform(4, 6))
 
                 if page_num == pages_to_scrape:
                     print("reached limit. stopping.")
@@ -225,36 +275,32 @@ def scrape_complaints(company_name: str, pages_to_scrape: int):
                 next_page_button = main_page.get_by_test_id(
                     "next-page-navigation-button"
                 )
+
                 if next_page_button.is_visible():
                     print("Moving to next page...")
                     next_page_button.hover()
                     time.sleep(random.uniform(0.5, 1.5))
                     next_page_button.click(delay=random.randint(50, 150))
 
-                    print("Waiting for new content to load...")
-                    expect(first_title_element).not_to_have_text(
-                        old_title_text, timeout=30000
-                    )
-                    print("page updated")
-
-                    sleep_time = random.uniform(4, 6)
-                    print(f"waiting for {sleep_time:.2f} seconds before next page...")
-                    time.sleep(sleep_time)
+                    print("Waiting for new content...")
+                    try:
+                        expect(first_title_element).not_to_have_text(
+                            old_title_text, timeout=30000
+                        )
+                        print("Page updated.")
+                        time.sleep(random.uniform(4, 6))
+                    except:
+                        print("Page did not update visually, but continuing...")
                 else:
                     print("could not find 'Next Page' button.")
                     break
 
-            except TimeoutError:
-                print(f"a timeout occurred in page {page_num}.")
-                break
-            except Exception as e:
-                print(f"An error occurred while loading the page num {page_num}: {e}")
-                return []
-
-        print("\nScraping finished. Closing browser.")
-        context.close()
-        browser.close()
-        return all_complaints_data
+        except Exception as e:
+            print(f"Critical error scraping company {company_name}: {e}")
+        finally:
+            print("\nScraping finished. Closing browser.")
+            context.close()
+            browser.close()
 
 
 def expand_buttons(main_page, segments):
@@ -423,42 +469,36 @@ def get_best_ranked_companies_by_category(category, category_url):
     return ranked_companies_names
 
 
-def execute(companies):
-    results = []
-    max_threads = 1
+def execute(category_name, category_url):
+    companies = get_best_ranked_companies_by_category(category_name, category_url)
 
+    already_scraped = get_scraped_companies(OUTPUT_FILENAME)
+    print(f"Found {len(already_scraped)} companies already in CSV.")
+
+    companies_to_process = [c for c in companies if c not in already_scraped]
+    print(f"Remaining companies to scrape: {len(companies_to_process)}")
+
+    if not companies_to_process:
+        print("All companies finished! Exiting.")
+        return
+
+    max_threads = 1
     with ThreadPoolExecutor(max_threads) as executor:
         futures = {
-            executor.submit(scrape_complaints, company, 3): company
+            executor.submit(scrape_complaints, company): company
             for company in companies
         }
         for future in as_completed(futures):
             company = futures[future]
             try:
-                data = future.result()
-                if data:
-                    results.extend(data)
-                    print(f"Finished {company}, got {len(data)} complaints")
-                else:
-                    print(f"No data for {company}")
+                future.result()
+                print(f"Done with {company}")
             except Exception as e:
-                print(f"Error scraping {company}: {e}")
-
-    if results:
-        df = pd.DataFrame(results)
-        base_output_file = f"reclameaqui_{len(companies)}_companies_complaints"
-
-        csv_file = f"{base_output_file}.csv"
-        df.to_csv(
-            csv_file, index=False, encoding="utf-8-sig", sep=";", quoting=csv.QUOTE_ALL
-        )
-        print(f"Data saved successfully to {csv_file}")
+                print(f"Job failed for {company}: {e}")
 
 
 if __name__ == "__main__":
-    companies = get_best_ranked_companies_by_category(
-        "Brinquedos e Entretenimento Infantil",
-        "https://www.reclameaqui.com.br/segmentos/arte-e-entretenimento/brinquedos-e-entretenimento-infantil/",
-    )
+    cat_name = "Brinquedos e Entretenimento Infantil"
+    cat_url = "https://www.reclameaqui.com.br/segmentos/arte-e-entretenimento/brinquedos-e-entretenimento-infantil/"
 
-    execute(companies)
+    execute(cat_name, cat_url)
