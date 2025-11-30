@@ -23,5 +23,7 @@ nohup python -u main.py > output.log 2>&1 &
 
 Visualize logs while running
 ```
+cd /home/ubuntu/scraper/
+source .venv/bin/activate
 tail -n 100 -f output.log
 ```
