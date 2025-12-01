@@ -45,17 +45,57 @@ def save_incremental(data_list, filename):
         print(f"[ERROR] Could not save data: {e}")
 
 
-def get_scraped_companies(filename):
+def get_starting_point(filename, companies):
+    default_return = (companies[0], 1, 0, companies)
     if not os.path.isfile(filename):
-        return set()
+        return default_return
+
     try:
-        df = pd.read_csv(filename, sep=";", usecols=["company_name"])
-        return set(df["company_name"].unique())
+        df = pd.read_csv(filename, sep=";")
+        if df.empty:
+            print("df empty")
+            return default_return
+
+        last_row = df.iloc[-1]
+        last_company = last_row.get("company_name")
+
+        def safe_int(val, default):
+            try:
+                return int(float(val))
+            except:
+                return default
+
+        last_page = safe_int(last_row.get("page"), 1)
+        last_total = safe_int(last_row.get("total_pages"), 1)
+        last_complaint = safe_int(last_row.get("complaint_number"), 0)
+
+        if last_page < last_total:
+            print(
+                f"Resuming {last_company} at Page {last_page}, Complaint {last_complaint}"
+            )
+            return (last_company, last_page, last_complaint + 1, companies)
+        else:
+            if last_company in companies:
+                current_idx = companies.index(last_company)
+                if current_idx + 1 < len(companies):
+                    next_company = companies[current_idx + 1]
+                    remaining_companies = companies[current_idx + 1 :]
+                    print(
+                        f"Previous company {last_company} done. Moving to {next_company}."
+                    )
+                    return (next_company, 1, 0, remaining_companies)
+                else:
+                    return (None, None, None, [])
+            else:
+                remaining = [c for c in companies if c != last_company]
+                if remaining:
+                    return (remaining[0], 1, 0, remaining)
+                return (None, None, None, [])
     except Exception as e:
         print(
             f"Warning: Could not read existing file to resume. Starting fresh. Error: {e}"
         )
-        return set()
+        return companies[0], 1, 0, companies
 
 
 def check_cookie(page):
@@ -68,9 +108,9 @@ def check_cookie(page):
         print("No cookie banner found or it was already dismissed.")
 
 
-def fetch_complaint_info(soup, i):
+def fetch_complaint_info(soup, i, page_number, total_pages):
     complaint_data = {}
-    print(f"Opened complaint detail page for complaint {i + 1}")
+    print(f"Opened complaint detail page for complaint {i}")
 
     def safe_get_text(element):
         return element.get_text(strip=True) if element else "Not found"
@@ -129,12 +169,18 @@ def fetch_complaint_info(soup, i):
                 if score_header
                 else "Not found"
             )
+            complaint_data["complaint_number"] = str(i)
+            complaint_data["page"] = str(page_number)
+            complaint_data["total_pages"] = str(total_pages)
+
             print("Details extracted successfully.")
         else:
+            print("Details not extracted (not found).")
             complaint_data.update(
                 {"solved": "Not found", "deal_again": "Not found", "score": "Not found"}
             )
     else:
+        print(f"Complaint container not found for complaint {i}")
         complaint_data = {
             "location": "Not found",
             "date": "Not found",
@@ -145,12 +191,15 @@ def fetch_complaint_info(soup, i):
             "solved": "Not found",
             "deal_again": "Not found",
             "score": "Not found",
+            "complaint_number": "None",
+            "page": "None",
+            "total_pages": "None",
         }
 
     return complaint_data
 
 
-def scrape_complaints(company_name: str):
+def scrape_complaints(company_name: str, start_page: int, start_complaint: int):
     print(f"Starting to scrape {company_name}...")
 
     base_url = "https://www.reclameaqui.com.br"
@@ -191,7 +240,7 @@ def scrape_complaints(company_name: str):
                 print("Could not parse page number from text. Defaulting to 1.")
                 total_pages = 1
 
-            for page_num in range(1, total_pages + 1):
+            for page_num in range(start_page, total_pages + 1):
                 page_data = []
                 print(
                     f"\n--- Scraping Page {page_num}/{total_pages} for {company_name} ---"
@@ -240,35 +289,84 @@ def scrape_complaints(company_name: str):
                             }
                         )
 
-                for i, link_info in enumerate(page_links):
-                    print(f"  -> Navigating to complaint {i+1}: {link_info['url']}")
+                complaints_to_visit = page_links[start_complaint:]
+
+                list_page_url = main_page.url
+                for i, link_info in enumerate(
+                    complaints_to_visit, start=start_complaint
+                ):
+                    print(f"-> Complaint {i}: {link_info['url']}")
                     try:
                         main_page.goto(
                             link_info["url"],
                             wait_until="domcontentloaded",
                             timeout=45000,
                         )
-                        time.sleep(random.uniform(1.7, 3.8))
+
+                        try:
+                            main_page.wait_for_selector(
+                                ".sc-98c0be-3.fmbfWT", timeout=45000
+                            )
+                            time.sleep(random.uniform(1.5, 3.0))
+                        except TimeoutError:
+                            print(
+                                f"Complaint container didn't load for complaint {i}, retrying..."
+                            )
+
+                            main_page.reload(wait_until="domcontentloaded")
+                            try:
+                                main_page.wait_for_selector(
+                                    ".sc-98c0be-3.fmbfWT", timeout=10000
+                                )
+                                time.sleep(random.uniform(2.0, 3.5))
+                            except TimeoutError:
+                                print(
+                                    f"Complaint container still not found after retry, skipping..."
+                                )
+                                main_page.go_back(wait_until="domcontentloaded")
+                                continue
 
                         detail_soup = BeautifulSoup(main_page.content(), "html.parser")
-                        details = fetch_complaint_info(detail_soup, i)
+
+                        details = fetch_complaint_info(
+                            detail_soup, i, page_num, total_pages
+                        )
 
                         link_info.update(details)
                         page_data.append(link_info)
 
-                        print("  <- Navigating back to the list page...")
-                        main_page.go_back(wait_until="domcontentloaded")
+                        main_page.goto(
+                            list_page_url, wait_until="domcontentloaded", timeout=60000
+                        )
+
+                        try:
+                            main_page.wait_for_selector(
+                                total_pages_selector, timeout=30000
+                            )
+                        except TimeoutError:
+                            print(f"Lost the list page, retrying navigation...")
+                            time.sleep(random.uniform(2, 4))
+                            main_page.goto(
+                                list_page_url,
+                                wait_until="domcontentloaded",
+                                timeout=60000,
+                            )
+                            main_page.wait_for_selector(
+                                total_pages_selector, timeout=45000
+                            )
                     except Exception as e:
-                        print(f"Failed to scrape specific complaint: {e}")
+                        print(f"Error extracting complaint: {e}")
                         try:
                             main_page.goto(url, wait_until="domcontentloaded")
                         except:
                             pass
 
                 save_incremental(page_data, OUTPUT_FILENAME)
+                start_complaint = 0
+
                 print(f"Finished scraping details for page {page_num}.")
 
-                if page_num == pages_to_scrape:
+                if page_num >= total_pages:
                     print("reached limit. stopping.")
                     break
 
@@ -472,22 +570,34 @@ def get_best_ranked_companies_by_category(category, category_url):
 def execute(category_name, category_url):
     companies = get_best_ranked_companies_by_category(category_name, category_url)
 
-    already_scraped = get_scraped_companies(OUTPUT_FILENAME)
-    print(f"Found {len(already_scraped)} companies already in CSV.")
-
-    companies_to_process = [c for c in companies if c not in already_scraped]
-    print(f"Remaining companies to scrape: {len(companies_to_process)}")
+    resume_company, resume_page, resume_complaint, companies_to_process = (
+        get_starting_point(OUTPUT_FILENAME, companies)
+    )
 
     if not companies_to_process:
         print("All companies finished! Exiting.")
         return
 
+    print(
+        f"Resuming from: {resume_company} at Page {resume_page}, Complaint {resume_complaint}"
+    )
+    print(f"Companies left to process: {len(companies_to_process)}")
+
     max_threads = 1
     with ThreadPoolExecutor(max_threads) as executor:
-        futures = {
-            executor.submit(scrape_complaints, company): company
-            for company in companies
-        }
+        futures = {}
+        for comp in companies_to_process:
+            if comp == resume_company:
+                current_start_page = resume_page
+                current_start_complaint = resume_complaint
+            else:
+                current_start_page = 1
+                current_start_complaint = 0
+
+            future = executor.submit(
+                scrape_complaints, comp, current_start_page, current_start_complaint
+            )
+            futures[future] = comp
         for future in as_completed(futures):
             company = futures[future]
             try:
