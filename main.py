@@ -1,5 +1,4 @@
 import os
-from sys import exception
 import time
 import re
 import csv
@@ -205,19 +204,38 @@ def scrape_complaints(company_name: str, start_page: int, start_complaint: int):
     base_url = "https://www.reclameaqui.com.br"
     url = f"{base_url}/empresa/{company_name}/lista-reclamacoes/?status=EVALUATED"
 
-    all_complaints_data = []
+    def block_heavy_resources(route):
+        if route.request.resource_type in [
+            "image",
+            "media",
+            "font",
+            "stylesheet",
+            "other",
+        ]:
+            route.abort()
+        else:
+            route.continue_()
 
     with Stealth().use_sync(sync_playwright()) as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-setuid-sandbox",
+                "--disable-gl-drawing-for-tests",
+            ],
+        )
         context = browser.new_context(
             user_agent=get_random_ua(),
             viewport={"width": 1920, "height": 1080},
         )
+        context.route("**/*", block_heavy_resources)
         main_page = context.new_page()
 
         try:
             print(f"Navigating to {url}...")
-            main_page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            main_page.goto(url, wait_until="domcontentloaded", timeout=90000)
             check_cookie(main_page)
 
             total_pages_selector = ".sc-1sm4sxr-0.iwOeoe"
