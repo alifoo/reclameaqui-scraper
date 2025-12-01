@@ -318,12 +318,12 @@ def scrape_complaints(company_name: str, start_page: int, start_complaint: int):
                         main_page.goto(
                             link_info["url"],
                             wait_until="domcontentloaded",
-                            timeout=45000,
+                            timeout=90000,
                         )
 
                         try:
                             main_page.wait_for_selector(
-                                ".sc-98c0be-3.fmbfWT", timeout=45000
+                                ".sc-98c0be-3.fmbfWT", timeout=90000
                             )
                             time.sleep(random.uniform(1.5, 3.0))
                         except TimeoutError:
@@ -370,7 +370,7 @@ def scrape_complaints(company_name: str, start_page: int, start_complaint: int):
                                 timeout=60000,
                             )
                             main_page.wait_for_selector(
-                                total_pages_selector, timeout=45000
+                                total_pages_selector, timeout=90000
                             )
                     except Exception as e:
                         print(f"Error extracting complaint: {e}")
